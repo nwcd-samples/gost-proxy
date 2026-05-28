@@ -1,0 +1,46 @@
+api:
+  addr: :18080
+  pathPrefix: /api
+  accessLog: true
+  auth:
+    username: admin
+    password: changeMe!2026
+log:
+  level: info
+  format: json
+authers:
+  - name: proxy-auth
+    auths:
+      - username: user1
+        password: pass123
+bypasses:
+  - name: kiro-whitelist
+    reverse: true
+    matchers:
+      - .kiro.dev
+      - .app.kiro.dev
+      - q.us-east-1.amazonaws.com
+      - q.eu-central-1.amazonaws.com
+      - cognito-identity.us-east-1.amazonaws.com
+      - .signin.aws
+      - .signin.aws.amazon.com
+      - .awsapps.com
+      - portal.sso.us-east-1.amazonaws.com
+      - assets.sso-portal.us-east-1.amazonaws.com
+      - oidc.us-east-1.amazonaws.com
+      - login.microsoftonline.com
+      - open-vsx.org
+      - .eclipsecontent.org
+      - github.com
+      - raw.githubusercontent.com
+      - billing.stripe.com
+      - checkout.stripe.com
+services:
+  - name: http-proxy
+    addr: :8080
+    handler:
+      type: http
+      auther: proxy-auth
+    listener:
+      type: tcp
+    bypass: kiro-whitelist

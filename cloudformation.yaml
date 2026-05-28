@@ -1,0 +1,247 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Gost HTTP Proxy for Kiro IDE on Amazon Linux 2023
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.large
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3a.micro
+      - t3a.small
+      - t3a.medium
+      - c6i.large
+      - c6i.xlarge
+      - c6i.2xlarge
+      - c6in.large
+      - c6in.xlarge
+      - c6in.2xlarge
+    Description: EC2 instance type
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: SSH key pair name
+  AllowedCIDR:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to access proxy (recommend restricting to your IP)
+  AdminCIDR:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to access Web UI (recommend restricting)
+  ProxyUser:
+    Type: String
+    Default: user1
+    Description: Proxy username
+  ProxyPass:
+    Type: String
+    NoEcho: true
+    Default: pass123
+    Description: Proxy password
+  ApiUser:
+    Type: String
+    Default: admin
+    Description: Gost API username
+  ApiPass:
+    Type: String
+    NoEcho: true
+    Default: Kir0@Gost2026!Proxy
+    Description: Gost API password (high strength)
+  SSORegion:
+    Type: String
+    Default: us-east-1
+    Description: The AWS Region where your identity center instance is enabled.
+  EnableWhitelist:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Enable Kiro whitelist (false = proxy all traffic)
+
+Conditions:
+  UseWhitelist: !Equals [!Ref EnableWhitelist, 'true']
+
+Resources:
+  EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref Instance
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Gost Proxy Security Group
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref AllowedCIDR
+          Description: HTTP Proxy
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: !Ref AdminCIDR
+          Description: Gost Web UI
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      SecurityGroupIds:
+        - !GetAtt SecurityGroup.GroupId
+      UserData:
+        Fn::Base64:
+          Fn::Sub:
+            - |
+              #!/bin/bash
+              dnf install -y docker
+              systemctl start docker
+              systemctl enable docker
+
+              # Install docker compose plugin
+              mkdir -p /usr/local/lib/docker/cli-plugins
+              curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+              chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+              # Create project directory
+              mkdir -p /opt/gost-proxy
+              cd /opt/gost-proxy
+
+              # Write gost.yaml
+              cat > gost.yaml <<'GOSTEOF'
+              api:
+                addr: :18080
+                pathPrefix: /api
+                accessLog: true
+                auth:
+                  username: ${ApiUser}
+                  password: ${ApiPass}
+              log:
+                level: info
+                format: json
+              authers:
+                - name: proxy-auth
+                  auths:
+                    - username: ${ProxyUser}
+                      password: ${ProxyPass}
+              bypasses:
+                - name: kiro-whitelist
+                  reverse: true
+                  matchers:
+                    - .kiro.dev
+                    - .app.kiro.dev
+                    - q.us-east-1.amazonaws.com
+                    - q.eu-central-1.amazonaws.com
+                    - cognito-identity.us-east-1.amazonaws.com
+                    - .signin.aws
+                    - .signin.aws.amazon.com
+                    - .awsapps.com
+                    - portal.sso.${SSORegion}.amazonaws.com
+                    - assets.sso-portal.${SSORegion}.amazonaws.com
+                    - oidc.${SSORegion}.amazonaws.com
+                    - login.microsoftonline.com
+                    - open-vsx.org
+                    - .eclipsecontent.org
+                    - github.com
+                    - raw.githubusercontent.com
+                    - billing.stripe.com
+                    - checkout.stripe.com
+              services:
+                - name: http-proxy
+                  addr: :8080
+                  handler:
+                    type: http
+                    auther: proxy-auth
+                  listener:
+                    type: tcp
+                    metadata:
+                      readTimeout: 300s
+                      writeTimeout: 300s
+                  ${BypassLine}
+              GOSTEOF
+
+              # Write docker-compose.yml
+              cat > docker-compose.yml <<'COMPEOF'
+              services:
+                gost:
+                  image: gogost/gost:latest
+                  pull_policy: always
+                  container_name: gost-proxy
+                  restart: unless-stopped
+                  ports:
+                    - "8080:8080"
+                    - "18080:18080"
+                  volumes:
+                    - ./gost.yaml:/etc/gost/gost.yaml
+                  command: -C /etc/gost/gost.yaml
+                gost-ui-orig:
+                  image: gogost/gost-ui:latest
+                  pull_policy: always
+                  container_name: gost-ui-orig
+                  restart: unless-stopped
+                config-saver:
+                  image: aiworkspaces/gost-config-saver:latest
+                  pull_policy: always
+                  container_name: config-saver
+                  restart: unless-stopped
+                  environment:
+                    - GOST_API=http://gost:18080/api
+                    - GOST_USER=${ApiUser}
+                    - GOST_PASS=${ApiPass}
+                    - CONFIG_FILE=/data/gost.yaml
+                  volumes:
+                    - ./gost.yaml:/data/gost.yaml
+                  depends_on:
+                    - gost
+                gost-ui:
+                  image: aiworkspaces/gost-webui:latest
+                  pull_policy: always
+                  container_name: gost-web-ui
+                  restart: unless-stopped
+                  ports:
+                    - "3000:80"
+                  depends_on:
+                    - gost
+                    - gost-ui-orig
+                    - config-saver
+              COMPEOF
+
+              # Start services
+              docker compose up -d
+            - BypassLine: !If
+                - UseWhitelist
+                - 'bypass: kiro-whitelist'
+                - ''
+      Tags:
+        - Key: Name
+          Value: gost-proxy
+
+Outputs:
+  PublicIP:
+    Description: Instance public IP (EIP)
+    Value: !Ref EIP
+  ProxyEndpoint:
+    Description: Proxy endpoint for Kiro
+    Value: !Sub 'http://${ProxyUser}:${ProxyPass}@${EIP}:8080'
+  ApiEndpoint:
+    Description: Gost API endpoint (accessible only from instance itself)
+    Value: !Sub 'http://${EIP}:18080/api'
+  WebUI:
+    Description: Gost Web UI (user management)
+    Value: !Sub 'http://${EIP}:3000'
+  WebUIOriginal:
+    Description: Original Gost UI (advanced)
+    Value: !Sub 'http://${EIP}:3000/ui/'
+  WebUIAuth:
+    Description: Web UI login credentials
+    Value: !Sub '${ApiUser} / ${ApiPass}'
+  KiroConfig:
+    Description: Set these env vars to use with Kiro CLI
+    Value: !Sub |
+      export HTTP_PROXY=http://${ProxyUser}:${ProxyPass}@${EIP}:8080
+      export HTTPS_PROXY=http://${ProxyUser}:${ProxyPass}@${EIP}:8080

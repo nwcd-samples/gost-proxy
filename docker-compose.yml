@@ -1,0 +1,30 @@
+services:
+  # Gost 代理服务
+  gost:
+    image: gogost/gost:latest
+    container_name: gost-proxy
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PROXY_PORT:-8080}:8080"
+      - "${GOST_API_PORT:-18080}:18080"
+    volumes:
+      - ./gost.yaml:/etc/gost/gost.yaml
+    command: -C /etc/gost/gost.yaml -O /etc/gost/gost.yaml
+    networks:
+      - proxy-network
+
+  # Gost UI - 官方 Web 管理界面
+  gost-ui:
+    image: gogost/gost-ui:latest
+    container_name: gost-web-ui
+    restart: unless-stopped
+    ports:
+      - "${GOST_UI_PORT:-3000}:80"
+    networks:
+      - proxy-network
+    depends_on:
+      - gost
+
+networks:
+  proxy-network:
+    driver: bridge

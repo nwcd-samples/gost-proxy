@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gost Proxy - 用户管理</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f5;padding:20px}
+.container{max-width:1000px;margin:0 auto}
+h1{text-align:center;margin-bottom:20px;color:#333}
+.card{background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;box-shadow:0 2px 4px rgba(0,0,0,.1)}
+.card h2{margin-bottom:12px;font-size:16px;color:#555}
+.form-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.form-row input,.form-row textarea{flex:1;min-width:120px;padding:8px 12px;border:1px solid #ddd;border-radius:4px;font-size:14px}
+.btn{padding:8px 16px;border:none;border-radius:4px;cursor:pointer;font-size:14px;white-space:nowrap}
+.btn-primary{background:#1677ff;color:#fff}.btn-primary:hover{background:#0958d9}
+.btn-secondary{background:#f0f0f0;color:#333}.btn-secondary:hover{background:#e0e0e0}
+.btn-danger{background:#ff4d4f;color:#fff;padding:4px 10px;font-size:12px}.btn-danger:hover{background:#cf1322}
+.btn-warn{background:#faad14;color:#fff;padding:4px 10px;font-size:12px}.btn-warn:hover{background:#d48806}
+.btn-success{background:#52c41a;color:#fff}.btn-success:hover{background:#389e0d}
+.user-table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
+.user-table th,.user-table td{padding:8px 10px;text-align:left;border-bottom:1px solid #f0f0f0}
+.user-table th{background:#fafafa;font-weight:500;color:#555}
+.user-table .kiro-config{font-family:monospace;font-size:11px;color:#666;word-break:break-all;max-width:300px}
+.user-actions{display:flex;gap:4px}
+.status{padding:4px 8px;border-radius:4px;font-size:13px;margin-bottom:12px}
+.status.ok{background:#f6ffed;color:#389e0d}
+.status.err{background:#fff2f0;color:#cf1322}
+.password-wrap{display:flex;gap:6px;flex:1;min-width:120px}
+.password-wrap input{flex:1}
+#connForm{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+#connForm input{padding:8px 12px;border:1px solid #ddd;border-radius:4px;font-size:14px;flex:1;min-width:100px}
+.toolbar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+textarea{resize:vertical}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🛡️ Gost Proxy 用户管理</h1>
+
+<div class="card">
+<h2>API 连接</h2>
+<form id="connForm">
+<input id="apiAddr" value="/api" placeholder="API地址，默认 /api" required>
+<input id="apiUser" placeholder="用户名" required>
+<input id="apiPass" type="password" placeholder="密码" required>
+<button type="submit" class="btn btn-primary">连接</button>
+</form>
+<div id="connStatus"></div>
+</div>
+
+<div class="card" id="addUserCard" style="display:none">
+<h2>添加用户</h2>
+<div class="form-row">
+<input id="newUser" placeholder="用户名" required>
+<div class="password-wrap">
+<input id="newPass" placeholder="密码" required>
+<button type="button" class="btn btn-secondary" onclick="genPassUI()">🎲 生成</button>
+</div>
+<button type="button" class="btn btn-primary" onclick="addUser()">添加</button>
+</div>
+<div id="addStatus" style="margin-top:8px"></div>
+</div>
+
+<div class="card" id="batchCard" style="display:none">
+<h2>批量创建用户</h2>
+<div class="form-row" style="align-items:flex-start">
+<textarea id="batchInput" rows="3" placeholder="每行一个用户名（密码自动生成），或格式: 用户名:密码" style="min-width:300px"></textarea>
+<div style="display:flex;flex-direction:column;gap:6px">
+<button type="button" class="btn btn-primary" onclick="batchCreate()">批量创建</button>
+<div style="display:flex;gap:4px;align-items:center">
+<input id="batchCount" type="number" value="5" min="1" max="100" style="width:60px;padding:4px 8px;font-size:13px;border:1px solid #ddd;border-radius:4px">
+<button type="button" class="btn btn-secondary" onclick="batchGenerate()">生成</button>
+</div>
+</div>
+</div>
+<div id="batchStatus" style="margin-top:8px"></div>
+</div>
+
+<div class="card" id="userListCard" style="display:none">
+<h2>当前用户 (<span id="userCount">0</span>)</h2>
+<div class="toolbar">
+<button class="btn btn-success" onclick="exportUsers()">📥 导出用户</button>
+</div>
+<div style="overflow-x:auto">
+<table class="user-table" id="userTable">
+<thead><tr><th>用户名</th><th>密码</th><th>Kiro IDE 配置</th><th>操作</th></tr></thead>
+<tbody id="userList"></tbody>
+</table>
+</div>
+</div>
+</div>
+
+<script>
+let apiBase='',authHeader='',autherName='',proxyHost='';
+
+function saveConfig(){fetch('/save-config').catch(()=>{});}
+
+
+document.getElementById('connForm').onsubmit=async e=>{
+  e.preventDefault();
+  apiBase=document.getElementById('apiAddr').value.replace(/\/$/,'');
+  authHeader='Basic '+btoa(document.getElementById('apiUser').value+':'+document.getElementById('apiPass').value);
+  proxyHost=location.hostname+':8080';
+  try{
+    const r=await api('/config/authers');
+    if(!r.ok)throw new Error('认证失败');
+    const res=await r.json();
+    const authers=res.data&&res.data.list||[];
+    if(!authers.length)throw new Error('未找到认证器');
+    autherName=authers[0].name;
+    showStatus('connStatus','ok','✓ 已连接，认证器: '+autherName);
+    document.getElementById('addUserCard').style.display='';
+    document.getElementById('batchCard').style.display='';
+    document.getElementById('userListCard').style.display='';
+    loadUsers();
+  }catch(err){showStatus('connStatus','err','✗ '+err.message)}
+};
+
+function api(path,opt={}){
+  opt.headers={...opt.headers,'Authorization':authHeader,'Content-Type':'application/json'};
+  return fetch(apiBase+path,opt);
+}
+
+function kiroConfig(u,p){
+  return `http://${u}:${p}@${proxyHost}`;
+}
+
+async function loadUsers(){
+  const r=await api('/config/authers/'+autherName);
+  const res=await r.json();
+  const auths=(res.data&&res.data.auths)||[];
+  document.getElementById('userCount').textContent=auths.length;
+  document.getElementById('userList').innerHTML=auths.map(a=>
+    `<tr>
+      <td><strong>${esc(a.username)}</strong></td>
+      <td>${esc(a.password)}</td>
+      <td class="kiro-config">${esc(kiroConfig(a.username,a.password))}</td>
+      <td><div class="user-actions">
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="changePass('${esc(a.username)}')">改密</button>
+        <button class="btn btn-warn" onclick="resetPass('${esc(a.username)}')">重置</button>
+        <button class="btn btn-danger" onclick="delUser('${esc(a.username)}')">删除</button>
+      </div></td>
+    </tr>`
+  ).join('')||'<tr><td colspan="4" style="color:#999;text-align:center">暂无用户</td></tr>';
+}
+
+async function addUser(){
+  const u=document.getElementById('newUser').value.trim();
+  const p=document.getElementById('newPass').value.trim();
+  if(!u||!p)return showStatus('addStatus','err','请填写用户名和密码');
+  const r=await api('/config/authers/'+autherName);
+  const res=await r.json();
+  const auths=(res.data&&res.data.auths)||[];
+  if(auths.find(a=>a.username===u))return showStatus('addStatus','err','用户已存在');
+  auths.push({username:u,password:p});
+  const up=await api('/config/authers/'+autherName,{method:'PUT',body:JSON.stringify({name:autherName,auths})});
+  if(up.ok){
+    saveConfig();
+    showStatus('addStatus','ok','✓ 已添加');
+    document.getElementById('newUser').value='';
+    document.getElementById('newPass').value='';
+    loadUsers();
+  }else showStatus('addStatus','err','添加失败');
+}
+
+async function batchCreate(){
+  const lines=document.getElementById('batchInput').value.trim().split('\n').filter(l=>l.trim());
+  if(!lines.length)return showStatus('batchStatus','err','请输入用户列表');
+  const r=await api('/config/authers/'+autherName);
+  const res=await r.json();
+  const auths=(res.data&&res.data.auths)||[];
+  let added=0;
+  for(const line of lines){
+    const parts=line.trim().split(':');
+    const u=parts[0].trim();
+    const p=parts[1]?parts[1].trim():genPass();
+    if(!u||auths.find(a=>a.username===u))continue;
+    auths.push({username:u,password:p});
+    added++;
+  }
+  if(!added)return showStatus('batchStatus','err','没有新用户可添加');
+  const up=await api('/config/authers/'+autherName,{method:'PUT',body:JSON.stringify({name:autherName,auths})});
+  if(up.ok){
+    saveConfig();
+    showStatus('batchStatus','ok',`✓ 已批量添加 ${added} 个用户`);
+    document.getElementById('batchInput').value='';
+    loadUsers();
+  }else showStatus('batchStatus','err','批量添加失败');
+}
+
+function batchGenerate(){
+  const n=parseInt(document.getElementById('batchCount').value)||5;
+  const lines=[];
+  for(let i=0;i<n;i++)lines.push('user'+Math.floor(Math.random()*9000+1000));
+  document.getElementById('batchInput').value=lines.join('\n');
+}
+
+async function exportUsers(){
+  const r=await api('/config/authers/'+autherName);
+  const res=await r.json();
+  const auths=(res.data&&res.data.auths)||[];
+  let csv='用户名,密码,Kiro IDE 配置\n';
+  auths.forEach(a=>{
+    csv+=`${a.username},${a.password},http://${a.username}:${a.password}@${proxyHost}\n`;
+  });
+  const blob=new Blob([csv],{type:'text/csv'});
+  const url=URL.createObjectURL(blob);
+  const link=document.createElement('a');
+  link.href=url;link.download='gost-proxy-users.csv';
+  link.click();URL.revokeObjectURL(url);
+}
+
+async function delUser(username){
+  if(!confirm('确认删除用户 '+username+' ?'))return;
+  const r=await api('/config/authers/'+autherName);
+  const res=await r.json();
+  const auths=(res.data&&res.data.auths||[]).filter(a=>a.username!==username);
+  const up=await api('/config/authers/'+autherName,{method:'PUT',body:JSON.stringify({name:autherName,auths})});
+  if(up.ok){saveConfig();loadUsers();}
+}
+
+function genPass(){
+  const chars='abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let p='';for(let i=0;i<16;i++)p+=chars[Math.floor(Math.random()*chars.length)];
+  return p;
+}
+
+function genPassUI(){document.getElementById('newPass').value=genPass();}
+
+async function updatePass(username,newPass){
+  const r=await api('/config/authers/'+autherName);
+  const res=await r.json();
+  const auths=(res.data&&res.data.auths)||[];
+  const auth=auths.find(a=>a.username===username);
+  if(!auth)return;
+  auth.password=newPass;
+  const up=await api('/config/authers/'+autherName,{method:'PUT',body:JSON.stringify({name:autherName,auths})});
+  return up.ok?(saveConfig(),true):false;
+}
+
+async function changePass(username){
+  const newPass=prompt('请输入 '+username+' 的新密码:');
+  if(!newPass)return;
+  if(await updatePass(username,newPass)){alert('✓ 密码已修改');loadUsers();}
+  else alert('修改失败');
+}
+
+async function resetPass(username){
+  const newPass=genPass();
+  if(!confirm('将重置 '+username+' 的密码为:\n\n'+newPass+'\n\n请确认'))return;
+  if(await updatePass(username,newPass)){alert('✓ 密码已重置为: '+newPass);loadUsers();}
+  else alert('重置失败');
+}
+
+function showStatus(id,type,msg){
+  const el=document.getElementById(id);
+  el.className='status '+type;el.textContent=msg;
+  if(type==='ok')setTimeout(()=>el.textContent='',3000);
+}
+
+function esc(s){return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+</script>
+</body>
+</html>

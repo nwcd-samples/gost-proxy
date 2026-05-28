@@ -1,0 +1,49 @@
+#!/bin/sh
+# CGI script: exports Gost runtime config to gost.yaml
+
+GOST_API="${GOST_API:-http://gost:18080/api}"
+AUTH_HEADER=$(echo -n "${GOST_USER}:${GOST_PASS}" | base64)
+CONFIG_FILE="${CONFIG_FILE:-/data/gost.yaml}"
+
+# CORS + response headers
+echo "Content-Type: text/plain"
+echo "Access-Control-Allow-Origin: *"
+echo "Access-Control-Allow-Methods: POST, GET, OPTIONS"
+echo "Access-Control-Allow-Headers: *"
+echo ""
+
+# Handle OPTIONS preflight
+if [ "$REQUEST_METHOD" = "OPTIONS" ]; then
+  exit 0
+fi
+
+# Fetch current runtime config
+authers=$(curl -sf -H "Authorization: Basic ${AUTH_HEADER}" "${GOST_API}/config/authers")
+bypasses=$(curl -sf -H "Authorization: Basic ${AUTH_HEADER}" "${GOST_API}/config/bypasses")
+services=$(curl -sf -H "Authorization: Basic ${AUTH_HEADER}" "${GOST_API}/config/services")
+
+if [ -z "$authers" ]; then
+  echo "ERROR: Failed to fetch config from Gost API"
+  exit 1
+fi
+
+# Build complete config YAML from API data + static sections from existing file
+tmp="/tmp/gost-new-$$.yaml"
+
+yq -n "
+  .api = $(yq -o=json '.api' "$CONFIG_FILE") |
+  .log = $(yq -o=json '.log' "$CONFIG_FILE") |
+  .authers = $(echo "$authers" | yq -o=json '.data.list // []') |
+  .bypasses = $(echo "$bypasses" | yq -o=json '.data.list // []') |
+  .services = $(echo "$services" | yq -o=json '.data.list // []')
+" > "$tmp"
+
+if [ $? -eq 0 ] && [ -s "$tmp" ]; then
+  # 解决异常： mv: can't rename '/tmp/gost-new-8.yaml': Resource busy
+  cat "$tmp" > "$CONFIG_FILE" && rm -f "$tmp"
+  echo "OK: Config saved at $(date -Iseconds)"
+else
+  rm -f "$tmp"
+  echo "ERROR: Failed to generate config"
+  exit 1
+fi

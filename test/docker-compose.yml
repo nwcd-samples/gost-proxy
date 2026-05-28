@@ -1,0 +1,38 @@
+services:
+  gost:
+    image: gogost/gost:latest
+    container_name: gost-proxy
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "18080:18080"
+    volumes:
+      - ./gost.yaml:/etc/gost/gost.yaml
+    command: -C /etc/gost/gost.yaml
+  gost-ui-orig:
+    image: gogost/gost-ui:latest
+    container_name: gost-ui-orig
+    restart: unless-stopped
+  config-saver:
+    build: ../config-saver
+    container_name: config-saver
+    restart: unless-stopped
+    environment:
+      - GOST_API=http://gost:18080/api
+      - GOST_USER=admin
+      - GOST_PASS=changeMe!2026
+      - CONFIG_FILE=/data/gost.yaml
+    volumes:
+      - ./gost.yaml:/data/gost.yaml
+    depends_on:
+      - gost
+  gost-ui:
+    build: ../webui
+    container_name: gost-web-ui
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - gost
+      - gost-ui-orig
+      - config-saver
