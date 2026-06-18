@@ -41,6 +41,8 @@ services:
     handler:
       type: http
       auther: proxy-auth
+      keepalive: true
+      readTimeout: 300s
     listener:
       type: tcp
     bypass: kiro-whitelist

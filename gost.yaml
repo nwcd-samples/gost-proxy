@@ -22,6 +22,10 @@ services:
     addr: :8080
     handler:
       type: http
+      # 启用持久连接，避免客户端复用空闲连接时报 socket 连接失败
+      keepalive: true
+      # 读超时放到 handler 下才生效（默认仅 15s，对长连接太短）
+      readTimeout: 300s
       auths:
         - username: user1
           password: pass123
@@ -29,6 +33,3 @@ services:
           password: pass456
     listener:
       type: tcp
-      metadata:
-        readTimeout: 300s
-        writeTimeout: 300s
