@@ -156,12 +156,13 @@ Resources:
                   addr: :8080
                   handler:
                     type: http
+                    # 启用持久连接，避免客户端复用空闲连接时报 socket 连接失败
+                    keepalive: true
+                    # 读超时放到 handler 下才生效（默认仅 15s，对长连接太短）
+                    readTimeout: 300s
                     auther: proxy-auth
                   listener:
                     type: tcp
-                    metadata:
-                      readTimeout: 300s
-                      writeTimeout: 300s
                   ${BypassLine}
               GOSTEOF
 
@@ -245,3 +246,4 @@ Outputs:
     Value: !Sub |
       export HTTP_PROXY=http://${ProxyUser}:${ProxyPass}@${EIP}:8080
       export HTTPS_PROXY=http://${ProxyUser}:${ProxyPass}@${EIP}:8080
+      export NO_PROXY="localhost,127.0.0.1"
