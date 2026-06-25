@@ -19,6 +19,8 @@ bypasses:
     matchers:
       - .kiro.dev
       - .app.kiro.dev
+      # 放行所有 AWS 服务端点（含 aws cli：sts/ec2/s3/cloudformation 等）
+      - .amazonaws.com
       - q.us-east-1.amazonaws.com
       - q.eu-central-1.amazonaws.com
       - cognito-identity.us-east-1.amazonaws.com
