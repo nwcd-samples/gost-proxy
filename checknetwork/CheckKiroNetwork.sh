@@ -77,7 +77,8 @@ is_risk_region() {
 }
 
 # 查询 IP 的地理位置,返回国家代码
-# 策略: whois (本地) → ipinfo.io (国内可达) → ip-api.com (通过代理) → ip-api.com (直连)
+# 优先用"地理数据库"(反映实际服务位置),whois(注册地)仅作兜底
+# 顺序: ipinfo.io → api.ip.sb → ip-api.com(代理/直连) → whois
 get_ip_country() {
     local ip="$1"
     local proxy_opt=""
@@ -86,40 +87,32 @@ get_ip_country() {
     fi
     local country=""
 
-    # 方法1: whois 本地查询(最可靠,不需要联网到海外)
-    country=$(whois "$ip" 2>/dev/null | grep -i "^Country:" | head -1 | awk '{print $2}' | tr -d '\r\n' | tr '[:lower:]' '[:upper:]' || true)
-    if [[ -n "$country" && ${#country} -eq 2 ]]; then
-        echo "$country"
-        return
-    fi
-
-    # 方法2: ipinfo.io 直连(国内可达)
+    # 方法1(最准): ipinfo.io 地理数据库,直连(国内可达)
     country=$(curl -s --connect-timeout 5 --noproxy '*' "https://ipinfo.io/${ip}/country" 2>/dev/null | tr -d '\r\n ' || true)
-    if [[ -n "$country" && ${#country} -eq 2 ]]; then
-        echo "$country"
-        return
-    fi
+    if [[ -n "$country" && ${#country} -eq 2 ]]; then echo "$country"; return; fi
 
-    # 方法3: ip-api.com 通过代理
+    # 方法2: api.ip.sb 地理库(需 UA),直连
+    country=$(curl -s --connect-timeout 5 --noproxy '*' -H "User-Agent: Mozilla/5.0" "https://api.ip.sb/geoip/${ip}" 2>/dev/null | grep -o '"country_code":"[^"]*"' | cut -d'"' -f4 || true)
+    if [[ -n "$country" && ${#country} -eq 2 ]]; then echo "$country"; return; fi
+
+    # 方法3: ip-api.com 地理库(通过代理)
     if [[ -n "$proxy_opt" ]]; then
         country=$(curl -s --connect-timeout 5 $proxy_opt "http://ip-api.com/json/${ip}?fields=countryCode" 2>/dev/null | grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4 || true)
-        if [[ -n "$country" ]]; then
-            echo "$country"
-            return
-        fi
+        if [[ -n "$country" ]]; then echo "$country"; return; fi
     fi
 
-    # 方法4: ip-api.com 直连
+    # 方法4: ip-api.com 地理库(直连)
     country=$(curl -s --connect-timeout 5 --noproxy '*' "http://ip-api.com/json/${ip}?fields=countryCode" 2>/dev/null | grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4 || true)
-    if [[ -n "$country" ]]; then
-        echo "$country"
-        return
-    fi
+    if [[ -n "$country" ]]; then echo "$country"; return; fi
+
+    # 方法5(兜底,基于注册地 RIR,可能与实际服务位置不符): whois
+    country=$(whois "$ip" 2>/dev/null | grep -i "^Country:" | head -1 | awk '{print $2}' | tr -d '\r\n' | tr '[:lower:]' '[:upper:]' || true)
+    if [[ -n "$country" && ${#country} -eq 2 ]]; then echo "$country"; return; fi
 
     echo "UNKNOWN"
 }
 
-# 获取 IP 的详细位置信息
+# 获取 IP 的详细位置信息(优先 ipinfo.io 地理库,含城市)
 get_ip_detail() {
     local ip="$1"
     local proxy_opt=""
@@ -127,19 +120,25 @@ get_ip_detail() {
         proxy_opt="-x $2"
     fi
 
-    # whois 提取详细信息
-    local whois_result=$(whois "$ip" 2>/dev/null)
-    local org=$(echo "$whois_result" | grep -i "^OrgName:" | head -1 | sed 's/^OrgName:[[:space:]]*//')
-    local country=$(echo "$whois_result" | grep -i "^Country:" | head -1 | awk '{print $2}')
+    # ipinfo.io json(地理库,国内可达,含 city/region/org)
+    local json=$(curl -s --connect-timeout 5 --noproxy '*' "https://ipinfo.io/${ip}/json" 2>/dev/null || true)
+    local org=$(echo "$json" | grep -o '"org": *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+    local city=$(echo "$json" | grep -o '"city": *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+    local country=$(echo "$json" | grep -o '"country": *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+    if [[ -n "$org" || -n "$city" ]]; then
+        echo "{\"country\":\"$country\",\"city\":\"$city\",\"org\":\"$org\"}"
+        return
+    fi
 
+    # 兜底: whois(注册信息)
+    local whois_result=$(whois "$ip" 2>/dev/null || true)
+    org=$(echo "$whois_result" | grep -i "^OrgName:" | head -1 | sed 's/^OrgName:[[:space:]]*//' || true)
+    country=$(echo "$whois_result" | grep -i "^Country:" | head -1 | awk '{print $2}' || true)
     if [[ -n "$org" ]]; then
         echo "{\"country\":\"$country\",\"city\":\"\",\"org\":\"$org\"}"
         return
     fi
 
-    # fallback to ip-api
-    curl -s --connect-timeout 5 $proxy_opt "http://ip-api.com/json/${ip}?fields=country,regionName,city,org,countryCode" 2>/dev/null || \
-    curl -s --connect-timeout 5 --noproxy '*' "http://ip-api.com/json/${ip}?fields=country,regionName,city,org,countryCode" 2>/dev/null || \
     echo ""
 }
 

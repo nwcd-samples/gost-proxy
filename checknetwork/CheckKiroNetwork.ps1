@@ -64,14 +64,21 @@ function Test-RiskRegion($region) {
 }
 
 # 查询 IP 地理位置 (返回国家代码)
+# 优先地理数据库(实际服务位置),whois(注册地)仅兜底
 function Get-IpCountry($ip, $proxyUrl) {
-    # 方法1: ipinfo.io 直连(国内可达)
+    # 方法1(最准): ipinfo.io 地理库,直连(国内可达)
     try {
         $c = (Invoke-WebRequest -Uri "https://ipinfo.io/${ip}/country" -TimeoutSec 5 -UseBasicParsing 2>$null).Content.Trim()
         if ($c -and $c.Length -eq 2) { return $c.ToUpper() }
     } catch {}
 
-    # 方法2: ip-api.com 通过代理
+    # 方法2: api.ip.sb 地理库(需 UA),直连
+    try {
+        $resp = Invoke-RestMethod -Uri "https://api.ip.sb/geoip/${ip}" -Headers @{ "User-Agent" = "Mozilla/5.0" } -TimeoutSec 5 2>$null
+        if ($resp.country_code) { return $resp.country_code.ToUpper() }
+    } catch {}
+
+    # 方法3: ip-api.com 地理库(通过代理)
     if ($proxyUrl) {
         try {
             $resp = Invoke-RestMethod -Uri "http://ip-api.com/json/${ip}?fields=countryCode" `
@@ -80,13 +87,13 @@ function Get-IpCountry($ip, $proxyUrl) {
         } catch {}
     }
 
-    # 方法3: ip-api.com 直连
+    # 方法4: ip-api.com 地理库(直连)
     try {
         $resp = Invoke-RestMethod -Uri "http://ip-api.com/json/${ip}?fields=countryCode" -TimeoutSec 5 2>$null
         if ($resp.countryCode) { return $resp.countryCode }
     } catch {}
 
-    # 方法4: whois 命令 (如果可用)
+    # 方法5(兜底,基于注册地 RIR,可能与实际服务位置不符): whois
     try {
         $whoisResult = & whois $ip 2>$null | Out-String
         $match = [regex]::Match($whoisResult, '(?im)^Country:\s*(\w{2})')
@@ -98,6 +105,14 @@ function Get-IpCountry($ip, $proxyUrl) {
 
 # 获取 IP 详细信息
 function Get-IpDetail($ip, $proxyUrl) {
+    # ipinfo.io json(地理库,国内可达,含 city/org)
+    try {
+        $resp = Invoke-RestMethod -Uri "https://ipinfo.io/${ip}/json" -TimeoutSec 5 2>$null
+        if ($resp.org -or $resp.city) {
+            return [PSCustomObject]@{ country = $resp.country; city = $resp.city; org = $resp.org }
+        }
+    } catch {}
+
     if ($proxyUrl) {
         try {
             return Invoke-RestMethod -Uri "http://ip-api.com/json/${ip}?fields=country,city,org,countryCode" `
