@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # Kiro 网络环境检查工具 v1.0 (Windows PowerShell)
 # 检测项:
 #   1. 系统/浏览器代理配置
@@ -162,10 +162,10 @@ function Get-ProxyHost($proxyUrl) {
 }
 
 # 解析主机名为 IP
-function Resolve-ProxyHost($host) {
-    if ($host -match '^\d+\.\d+\.\d+\.\d+$') { return $host }
+function Resolve-ProxyHost($targetHost) {
+    if ($targetHost -match '^\d+\.\d+\.\d+\.\d+$') { return $targetHost }
     try {
-        $result = [System.Net.Dns]::GetHostAddresses($host) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1
+        $result = [System.Net.Dns]::GetHostAddresses($targetHost) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1
         if ($result) { return $result.IPAddressToString }
     } catch {}
     return $null
